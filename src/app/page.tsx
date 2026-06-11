@@ -22,7 +22,18 @@ type FormState = {
   lookbackMinutes: number
 }
 
-type FormErrors = Partial<Record<keyof FormState, string>>
+type FormErrors = Partial<Record<keyof FormState | 'projectLink', string>>
+type LinkStatus = {
+  kind: 'idle' | 'loading' | 'ready' | 'error'
+  message: string
+}
+type ParsedGithubLink = {
+  owner: string
+  repo: string
+  repository: string
+  branch?: string
+  commitSha?: string
+}
 type MarkerReceipt = {
   text?: string
   code?: number
@@ -36,7 +47,7 @@ type MarkerResult = {
 
 const initialForm: FormState = {
   service: '',
-  environment: 'prod',
+  environment: 'production',
   releaseId: '',
   repository: '',
   branch: 'main',
@@ -55,6 +66,105 @@ function markerKeyFor(form: FormState): string {
     form.branch.trim(),
     form.commitSha.trim(),
   ].join('|')
+}
+
+function parseGithubLink(value: string): ParsedGithubLink | null {
+  const raw = value.trim()
+  if (!raw) return null
+
+  const sshMatch = raw.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/)
+  if (sshMatch) {
+    const repo = sshMatch[2].replace(/\.git$/, '')
+    return {
+      owner: sshMatch[1],
+      repo,
+      repository: `https://github.com/${sshMatch[1]}/${repo}`,
+    }
+  }
+
+  try {
+    const url = new URL(raw)
+    if (!url.hostname.endsWith('github.com')) return null
+    const [owner, repoSegment, type, ...rest] = url.pathname.split('/').filter(Boolean)
+    if (!owner || !repoSegment) return null
+
+    const repo = repoSegment.replace(/\.git$/, '')
+    const parsed: ParsedGithubLink = {
+      owner,
+      repo,
+      repository: `https://github.com/${owner}/${repo}`,
+    }
+
+    if (type === 'commit' && rest[0]) parsed.commitSha = rest[0]
+    if (type === 'tree' && rest.length > 0) parsed.branch = rest.join('/')
+
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function applyGithubLinkToForm(form: FormState, parsed: ParsedGithubLink): FormState {
+  const commitSha = parsed.commitSha ?? form.commitSha
+
+  return {
+    ...form,
+    service: parsed.repo,
+    environment: form.environment.trim() || 'production',
+    releaseId: parsed.commitSha ? parsed.commitSha.slice(0, 12) : form.releaseId,
+    repository: parsed.repository,
+    branch: parsed.branch ?? (form.branch || 'main'),
+    commitSha,
+  }
+}
+
+async function readGithubJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: { Accept: 'application/vnd.github+json' },
+  })
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+  return response.json() as Promise<T>
+}
+
+async function resolveGithubLinkForm(value: string, baseForm: FormState): Promise<FormState> {
+  const parsed = parseGithubLink(value)
+  if (!parsed) throw new Error('Paste a GitHub repository, branch, or commit link.')
+
+  let next = applyGithubLinkToForm(baseForm, parsed)
+  const repo = await readGithubJson<{ default_branch?: string }>(
+    `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`
+  )
+  const branch = parsed.branch ?? repo.default_branch ?? next.branch ?? 'main'
+
+  let commitSha = parsed.commitSha ?? next.commitSha
+  if (!commitSha) {
+    const commit = await readGithubJson<{ sha?: string }>(
+      `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/commits/${encodeURIComponent(branch)}`
+    )
+    commitSha = commit.sha ?? ''
+  }
+
+  let releaseId = next.releaseId
+  if (!releaseId) {
+    try {
+      const packageFile = await readGithubJson<{ content?: string }>(
+        `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/contents/package.json?ref=${encodeURIComponent(branch)}`
+      )
+      const packageJson = packageFile.content
+        ? JSON.parse(atob(packageFile.content.replace(/\s/g, ''))) as { version?: string }
+        : null
+      releaseId = packageJson?.version ?? ''
+    } catch {
+      releaseId = ''
+    }
+  }
+
+  return {
+    ...next,
+    branch,
+    commitSha,
+    releaseId: releaseId || commitSha.slice(0, 12),
+  }
 }
 
 async function readApiError(response: Response): Promise<string> {
@@ -108,6 +218,8 @@ function isPreflightReport(value: unknown): value is PreflightReport {
 }
 
 export default function HomePage() {
+  const [projectLink, setProjectLink] = useState('')
+  const [linkStatus, setLinkStatus] = useState<LinkStatus>({ kind: 'idle', message: '' })
   const [form, setForm] = useState<FormState>(initialForm)
   const [report, setReport] = useState<PreflightReport | null>(null)
   const [runState, setRunState] = useState<RunState>('idle')
@@ -118,7 +230,6 @@ export default function HomePage() {
 
   const busy = runState !== 'idle'
   const hasMinimumInput = Boolean(form.service.trim() && form.environment.trim() && form.releaseId.trim())
-  const currentMarkerKey = markerKeyFor(form)
   const status = useMemo(() => {
     if (busy) return runState === 'ingesting' ? 'Writing marker to Splunk' : 'Running Splunk analysis'
     if (error) return 'Blocked'
@@ -128,26 +239,68 @@ export default function HomePage() {
     return 'Enter release details'
   }, [busy, error, hasMinimumInput, markerResult, report, runState])
 
-  function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm(current => ({ ...current, [key]: value }))
-    setFormErrors(current => ({ ...current, [key]: undefined }))
+  function clearRunState() {
     setReport(null)
     setMarkerResult(null)
     setMarkerKey(null)
     setError(null)
   }
 
-  async function writeSplunkMarker(): Promise<MarkerResult> {
+  function updateProjectLink(value: string) {
+    const parsed = parseGithubLink(value)
+
+    setProjectLink(value)
+    setFormErrors(current => ({ ...current, projectLink: undefined }))
+    clearRunState()
+
+    if (!value.trim()) {
+      setLinkStatus({ kind: 'idle', message: '' })
+      return
+    }
+
+    if (!parsed) {
+      setLinkStatus({ kind: 'error', message: 'Use a GitHub repository, branch, or commit link.' })
+      return
+    }
+
+    setForm(current => applyGithubLinkToForm(current, parsed))
+    setLinkStatus({ kind: 'ready', message: `Detected ${parsed.owner}/${parsed.repo}` })
+  }
+
+  async function hydrateProjectLink(value = projectLink, baseForm = form): Promise<FormState> {
+    if (!value.trim()) return baseForm
+
+    setLinkStatus({ kind: 'loading', message: 'Reading GitHub metadata' })
+
+    try {
+      const resolvedForm = await resolveGithubLinkForm(value, baseForm)
+      setForm(resolvedForm)
+      setLinkStatus({ kind: 'ready', message: `Loaded ${resolvedForm.service} from GitHub` })
+      return resolvedForm
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'Could not read that GitHub link.'
+      setLinkStatus({ kind: 'error', message })
+      throw caught
+    }
+  }
+
+  function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setForm(current => ({ ...current, [key]: value }))
+    setFormErrors(current => ({ ...current, [key]: undefined }))
+    clearRunState()
+  }
+
+  async function writeSplunkMarker(release: FormState): Promise<MarkerResult> {
     const response = await fetch('/api/deployments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        service: form.service,
-        environment: form.environment,
-        releaseId: form.releaseId,
-        repository: form.repository || undefined,
-        branch: form.branch || undefined,
-        commitSha: form.commitSha || undefined,
+        service: release.service,
+        environment: release.environment,
+        releaseId: release.releaseId,
+        repository: release.repository || undefined,
+        branch: release.branch || undefined,
+        commitSha: release.commitSha || undefined,
       }),
     })
 
@@ -163,11 +316,27 @@ export default function HomePage() {
 
   async function runPreflight(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const validationErrors = validateForm(form)
+
+    let release = form
+    if (projectLink.trim()) {
+      try {
+        release = await hydrateProjectLink(projectLink, form)
+      } catch {
+        const validationErrors: FormErrors = { projectLink: 'Paste a reachable GitHub repository, branch, or commit link.' }
+        setFormErrors(validationErrors)
+        return
+      }
+    }
+
+    const validationErrors = validateForm(release)
+    if (!projectLink.trim() && (validationErrors.service || validationErrors.releaseId)) {
+      validationErrors.projectLink = 'Paste a GitHub link or open Advanced details.'
+    }
     setFormErrors(validationErrors)
     if (Object.keys(validationErrors).length > 0) return
 
-    const shouldWriteMarker = markerKey !== currentMarkerKey || !markerResult
+    const releaseMarkerKey = markerKeyFor(release)
+    const shouldWriteMarker = markerKey !== releaseMarkerKey || !markerResult
 
     setError(null)
     setReport(null)
@@ -178,8 +347,8 @@ export default function HomePage() {
     try {
       if (shouldWriteMarker) {
         setRunState('ingesting')
-        setMarkerResult(await writeSplunkMarker())
-        setMarkerKey(currentMarkerKey)
+        setMarkerResult(await writeSplunkMarker(release))
+        setMarkerKey(releaseMarkerKey)
       }
 
       setRunState('analyzing')
@@ -188,13 +357,13 @@ export default function HomePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          service: form.service,
-          environment: form.environment,
-          releaseId: form.releaseId,
-          repository: form.repository || undefined,
-          branch: form.branch || undefined,
-          commitSha: form.commitSha || undefined,
-          lookbackMinutes: form.lookbackMinutes,
+          service: release.service,
+          environment: release.environment,
+          releaseId: release.releaseId,
+          repository: release.repository || undefined,
+          branch: release.branch || undefined,
+          commitSha: release.commitSha || undefined,
+          lookbackMinutes: release.lookbackMinutes,
         }),
       })
 
@@ -234,85 +403,104 @@ export default function HomePage() {
         <form className="control-panel" onSubmit={runPreflight}>
           <div className="panel-heading">
             <h1>Check release risk before deployment.</h1>
-            <p>One run writes the Splunk marker, then checks live Splunk evidence.</p>
+            <p>Paste a GitHub link. Release Preflight fills the details from real repository metadata, writes the Splunk marker, then checks live Splunk evidence.</p>
           </div>
 
-          <div className="form-grid">
-            <label>
-              Service name
-              <input
-                required
-                value={form.service}
-                onChange={event => updateField('service', event.target.value)}
-                placeholder="your-service"
-                aria-invalid={Boolean(formErrors.service)}
-                aria-describedby={formErrors.service ? 'service-error' : undefined}
-              />
-              {formErrors.service && <span className="field-error" id="service-error">{formErrors.service}</span>}
-            </label>
-            <label>
-              Environment name
-              <input
-                required
-                value={form.environment}
-                onChange={event => updateField('environment', event.target.value)}
-                placeholder="prod"
-                aria-invalid={Boolean(formErrors.environment)}
-                aria-describedby={formErrors.environment ? 'environment-error' : undefined}
-              />
-              {formErrors.environment && <span className="field-error" id="environment-error">{formErrors.environment}</span>}
-            </label>
-            <label>
-              Release or version ID
-              <input
-                required
-                value={form.releaseId}
-                onChange={event => updateField('releaseId', event.target.value)}
-                placeholder="0.1.0"
-                aria-invalid={Boolean(formErrors.releaseId)}
-                aria-describedby={formErrors.releaseId ? 'releaseId-error' : undefined}
-              />
-              {formErrors.releaseId && <span className="field-error" id="releaseId-error">{formErrors.releaseId}</span>}
-            </label>
-            <label>
-              Lookback window (minutes)
-              <input
-                required
-                min={5}
-                max={10080}
-                type="number"
-                value={form.lookbackMinutes}
-                onChange={event => updateField('lookbackMinutes', Number(event.target.value))}
-                aria-invalid={Boolean(formErrors.lookbackMinutes)}
-                aria-describedby={formErrors.lookbackMinutes ? 'lookback-error' : undefined}
-              />
-              {formErrors.lookbackMinutes && <span className="field-error" id="lookback-error">{formErrors.lookbackMinutes}</span>}
-            </label>
-            <label className="wide">
-              Repository URL
-              <input
-                value={form.repository}
-                onChange={event => updateField('repository', event.target.value)}
-                placeholder="https://github.com/fozagtx/preflight"
-              />
-            </label>
-            <label>
-              Git branch
-              <input
-                value={form.branch}
-                onChange={event => updateField('branch', event.target.value)}
-                placeholder="main"
-              />
-            </label>
-            <label>
-              Commit SHA
-              <input
-                value={form.commitSha}
-                onChange={event => updateField('commitSha', event.target.value)}
-                placeholder="paste commit SHA"
-              />
-            </label>
-          </div>
+          <label className="link-field">
+            GitHub link
+            <input
+              value={projectLink}
+              onBlur={() => void hydrateProjectLink()}
+              onChange={event => updateProjectLink(event.target.value)}
+              placeholder="https://github.com/fozagtx/preflight"
+              aria-invalid={Boolean(formErrors.projectLink)}
+              aria-describedby={formErrors.projectLink || linkStatus.message ? 'project-link-status' : undefined}
+            />
+            {(formErrors.projectLink || linkStatus.message) && (
+              <span
+                className={formErrors.projectLink || linkStatus.kind === 'error' ? 'field-error' : 'link-status'}
+                id="project-link-status"
+              >
+                {formErrors.projectLink || linkStatus.message}
+              </span>
+            )}
+          </label>
+
+          <details className="advanced-fields">
+            <summary>Advanced details</summary>
+            <div className="form-grid">
+              <label>
+                Service name
+                <input
+                  value={form.service}
+                  onChange={event => updateField('service', event.target.value)}
+                  placeholder="your-service"
+                  aria-invalid={Boolean(formErrors.service)}
+                  aria-describedby={formErrors.service ? 'service-error' : undefined}
+                />
+                {formErrors.service && <span className="field-error" id="service-error">{formErrors.service}</span>}
+              </label>
+              <label>
+                Environment name
+                <input
+                  value={form.environment}
+                  onChange={event => updateField('environment', event.target.value)}
+                  placeholder="production"
+                  aria-invalid={Boolean(formErrors.environment)}
+                  aria-describedby={formErrors.environment ? 'environment-error' : undefined}
+                />
+                {formErrors.environment && <span className="field-error" id="environment-error">{formErrors.environment}</span>}
+              </label>
+              <label>
+                Release or version ID
+                <input
+                  value={form.releaseId}
+                  onChange={event => updateField('releaseId', event.target.value)}
+                  placeholder="package version or commit"
+                  aria-invalid={Boolean(formErrors.releaseId)}
+                  aria-describedby={formErrors.releaseId ? 'releaseId-error' : undefined}
+                />
+                {formErrors.releaseId && <span className="field-error" id="releaseId-error">{formErrors.releaseId}</span>}
+              </label>
+              <label>
+                Lookback window (minutes)
+                <input
+                  min={5}
+                  max={10080}
+                  type="number"
+                  value={form.lookbackMinutes}
+                  onChange={event => updateField('lookbackMinutes', Number(event.target.value))}
+                  aria-invalid={Boolean(formErrors.lookbackMinutes)}
+                  aria-describedby={formErrors.lookbackMinutes ? 'lookback-error' : undefined}
+                />
+                {formErrors.lookbackMinutes && <span className="field-error" id="lookback-error">{formErrors.lookbackMinutes}</span>}
+              </label>
+              <label className="wide">
+                Repository URL
+                <input
+                  value={form.repository}
+                  onChange={event => updateField('repository', event.target.value)}
+                  placeholder="https://github.com/fozagtx/preflight"
+                />
+              </label>
+              <label>
+                Git branch
+                <input
+                  value={form.branch}
+                  onChange={event => updateField('branch', event.target.value)}
+                  placeholder="main"
+                />
+              </label>
+              <label>
+                Commit SHA
+                <input
+                  value={form.commitSha}
+                  onChange={event => updateField('commitSha', event.target.value)}
+                  placeholder="resolved from GitHub"
+                />
+              </label>
+            </div>
+          </details>
 
           {error && (
             <div className="message message-error" role="alert">
