@@ -1,0 +1,7 @@
+# Files and folders excluded from the Vercel runtime bundle.
+tests/
+docs/
+accuracy-report.json
+accuracy-report.raw.json
+.playwright-mcp/
+splunk-mcp-server_*.tgz
