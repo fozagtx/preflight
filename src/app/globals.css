@@ -447,6 +447,7 @@ summary:focus-visible {
 
 .metric-card,
 .ai-panel,
+.risk-depth-panel,
 .event-row,
 .action-list article,
 .spl-block {
@@ -470,6 +471,87 @@ summary:focus-visible {
   display: block;
   font-size: 24px;
   margin-top: 6px;
+}
+
+.risk-depth-panel {
+  margin-bottom: 18px;
+  padding: 18px;
+}
+
+.risk-depth-header {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding-bottom: 14px;
+}
+
+.risk-depth-header h3 {
+  font-size: clamp(22px, 2vw, 30px);
+  line-height: 1.05;
+  margin: 6px 0 0;
+}
+
+.risk-depth-header > strong {
+  color: var(--cyan);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.risk-depth-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.risk-depth-card {
+  border-left: 5px solid var(--green);
+  padding: 12px;
+}
+
+.risk-depth-card div {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.risk-depth-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.risk-depth-card strong {
+  font-size: 18px;
+}
+
+.risk-depth-card p,
+.risk-depth-card small {
+  display: block;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.risk-depth-card p {
+  color: var(--ink);
+  margin: 10px 0 6px;
+}
+
+.risk-depth-card small {
+  color: var(--muted);
+}
+
+.depth-medium {
+  border-left-color: var(--amber);
+}
+
+.depth-high,
+.depth-critical {
+  border-left-color: var(--red);
 }
 
 .ai-panel {

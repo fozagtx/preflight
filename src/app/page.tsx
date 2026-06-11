@@ -192,6 +192,64 @@ function scoreClass(report: PreflightReport | null): string {
   return 'score-low'
 }
 
+function crisisRiskLabel(report: PreflightReport): string {
+  if (report.riskScore >= 80) return 'Critical crisis risk'
+  if (report.riskScore >= 60) return 'High crisis risk'
+  if (report.riskScore >= 35) return 'Moderate crisis risk'
+  return 'Low crisis risk'
+}
+
+function riskDepthRows(report: PreflightReport) {
+  const { totalEvents, errorEvents, failureSignals, affectedHosts } = report.metrics
+
+  return [
+    {
+      label: 'Splunk coverage',
+      level: totalEvents === 0 ? 'critical' : 'clear',
+      value: `${totalEvents.toLocaleString()} event${totalEvents === 1 ? '' : 's'}`,
+      finding: totalEvents === 0
+        ? 'No release evidence returned for this service, environment, release, and lookback.'
+        : 'Splunk returned release evidence for this run.',
+      fix: totalEvents === 0
+        ? 'Add service, environment, and release_id fields to deployment/application logs, then rerun Release Preflight.'
+        : 'Keep the marker and release fields stable across deploys so future checks stay traceable.',
+    },
+    {
+      label: 'Explicit errors',
+      level: errorEvents > 0 ? 'critical' : 'clear',
+      value: errorEvents.toLocaleString(),
+      finding: errorEvents > 0
+        ? 'Splunk rows include error, critical, or fatal severity.'
+        : 'No explicit error severity matched this release window.',
+      fix: errorEvents > 0
+        ? 'Open the top error source/host in Splunk, patch the failing path, redeploy, then rerun this report.'
+        : 'No error fix required from current Splunk evidence.',
+    },
+    {
+      label: 'Failure language',
+      level: failureSignals > 0 ? 'high' : 'clear',
+      value: failureSignals.toLocaleString(),
+      finding: failureSignals > 0
+        ? 'Raw events contain timeout, exception, failure, panic, OOM, 5xx, or connection-refused language.'
+        : 'No failure-language signal matched this release window.',
+      fix: failureSignals > 0
+        ? 'Search the returned SPL for the exact term, fix the owner service, and confirm the count drops to zero.'
+        : 'No failure-language fix required from current Splunk evidence.',
+    },
+    {
+      label: 'Blast radius',
+      level: affectedHosts >= 5 ? 'high' : affectedHosts > 1 ? 'medium' : 'clear',
+      value: `${affectedHosts.toLocaleString()} host${affectedHosts === 1 ? '' : 's'}`,
+      finding: affectedHosts > 1
+        ? 'The release signal appears on more than one host.'
+        : 'The release signal is contained to one affected host.',
+      fix: affectedHosts > 1
+        ? 'Keep rollout staged by host or cohort until the same query returns stable low-risk evidence.'
+        : 'Proceed with normal observation for this host scope.',
+    },
+  ]
+}
+
 function validateForm(form: FormState): FormErrors {
   const errors: FormErrors = {}
 
@@ -551,6 +609,28 @@ export default function HomePage() {
                 <Metric label="Hosts" value={report.metrics.affectedHosts} />
               </div>
 
+              <section className="risk-depth-panel" aria-label="Crisis risk and recommended fixes">
+                <div className="risk-depth-header">
+                  <div>
+                    <span className="section-label">Crisis risk</span>
+                    <h3>{crisisRiskLabel(report)}</h3>
+                  </div>
+                  <strong>{report.riskScore}/100</strong>
+                </div>
+                <div className="risk-depth-grid">
+                  {riskDepthRows(report).map(row => (
+                    <article className={`risk-depth-card depth-${row.level}`} key={row.label}>
+                      <div>
+                        <span>{row.label}</span>
+                        <strong>{row.value}</strong>
+                      </div>
+                      <p>{row.finding}</p>
+                      <small>{row.fix}</small>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
               {report.metrics.totalEvents === 0 && (
                 <div className="message message-warning" role="status">
                   <AlertTriangle aria-hidden="true" size={18} />
@@ -586,7 +666,7 @@ export default function HomePage() {
                 </div>
 
                 <div>
-                  <div className="section-title">Actions</div>
+                  <div className="section-title">Recommended fixes</div>
                   <div className="action-list">
                     {report.remediations.length === 0 ? (
                       <p className="muted">No remediation actions were returned.</p>
