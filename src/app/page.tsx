@@ -330,9 +330,7 @@ export default function HomePage() {
                 ? 'Writing marker'
                 : runState === 'analyzing'
                   ? 'Checking Splunk'
-                  : report || markerResult
-                    ? 'Check Splunk Again'
-                    : 'Run Release Preflight'}
+                  : 'Run Release Preflight'}
             </button>
           </div>
         </form>

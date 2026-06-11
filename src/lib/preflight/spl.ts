@@ -28,8 +28,8 @@ ${dedupeDeploymentMarkersSpl()}
 | eval normalized_severity=lower(coalesce(severity, level, log_level, priority, "unknown"))
 | eval raw_text=lower(raw_text)
 | stats count as total_events
-    count(eval(match(normalized_severity, "error|critical|fatal"))) as error_events
-    count(eval(match(raw_text, "exception|timeout|failed|failure|panic|oom|5[0-9][0-9]|connection refused"))) as failure_signals
+    count(eval(is_release_marker=0 AND match(normalized_severity, "error|critical|fatal"))) as error_events
+    count(eval(is_release_marker=0 AND match(raw_text, "exception|timeout|failed|failure|panic|oom|(^|[^0-9])5[0-9][0-9]([^0-9]|$)|connection refused"))) as failure_signals
     dc(host) as affected_hosts
     latest(_time) as latest_time`
 }
@@ -38,7 +38,8 @@ export function buildErrorsSpl(request: PreflightRequest): string {
   return `${baseSearch(request)}
 ${dedupeDeploymentMarkersSpl()}
 | eval normalized_severity=lower(coalesce(severity, level, log_level, priority, "unknown"))
-| search normalized_severity="*error*" OR normalized_severity="*critical*" OR normalized_severity="*fatal*" OR raw_text="*timeout*" OR raw_text="*exception*" OR raw_text="*failed*"
+| eval raw_text=lower(raw_text)
+| where is_release_marker=0 AND (match(normalized_severity, "error|critical|fatal") OR match(raw_text, "exception|timeout|failed|failure|panic|oom|(^|[^0-9])5[0-9][0-9]([^0-9]|$)|connection refused"))
 | stats count as count latest(raw_text) as latest_message latest(_time) as latest_time by host source sourcetype
 | sort - count
 | head 8`

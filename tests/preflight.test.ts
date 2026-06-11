@@ -4,23 +4,26 @@ import { buildErrorsSpl, buildRecentSpl, buildSummarySpl } from '@/lib/preflight
 import type { PreflightRequest } from '@/lib/preflight/schema'
 
 const request: PreflightRequest = {
-  service: 'checkout-api',
-  environment: 'prod',
-  releaseId: '2026.06.11',
-  repository: 'https://github.com/acme/checkout',
+  service: 'release-preflight',
+  environment: 'production',
+  releaseId: '0.1.0',
+  repository: 'https://github.com/fozagtx/preflight',
   branch: 'main',
-  commitSha: 'f07c049',
+  commitSha: 'test-commit-sha',
   lookbackMinutes: 240,
 }
 
 describe('Release Preflight SPL builders', () => {
   it('builds service/environment/release scoped searches', () => {
-    expect(buildSummarySpl(request)).toContain('service="checkout-api"')
-    expect(buildSummarySpl(request)).toContain('environment="prod"')
-    expect(buildSummarySpl(request)).toContain('release_id="2026.06.11"')
+    expect(buildSummarySpl(request)).toContain('service="release-preflight"')
+    expect(buildSummarySpl(request)).toContain('environment="production"')
+    expect(buildSummarySpl(request)).toContain('release_id="0.1.0"')
     expect(buildSummarySpl(request)).toContain('NOT release_id=*')
     expect(buildSummarySpl(request)).toContain('dedup release_preflight_dedupe_key')
+    expect(buildSummarySpl(request)).toContain('count(eval(is_release_marker=0 AND match(normalized_severity')
+    expect(buildSummarySpl(request)).toContain('(^|[^0-9])5[0-9][0-9]([^0-9]|$)')
     expect(buildRecentSpl(request)).toContain('dedup release_preflight_dedupe_key')
+    expect(buildErrorsSpl(request)).toContain('| where is_release_marker=0 AND')
     expect(buildErrorsSpl(request)).toContain('| stats count as count')
     expect(buildRecentSpl(request)).toContain('| table _time normalized_severity')
   })
@@ -28,10 +31,10 @@ describe('Release Preflight SPL builders', () => {
   it('escapes quoted release inputs', () => {
     const spl = buildSummarySpl({
       ...request,
-      service: 'checkout"api',
+      service: 'release"preflight',
     })
 
-    expect(spl).toContain('service="checkout\\"api"')
+    expect(spl).toContain('service="release\\"preflight"')
   })
 })
 
