@@ -46,6 +46,17 @@ const initialForm: FormState = {
 
 type RunState = 'idle' | 'ingesting' | 'analyzing'
 
+function markerKeyFor(form: FormState): string {
+  return [
+    form.service.trim(),
+    form.environment.trim(),
+    form.releaseId.trim(),
+    form.repository.trim(),
+    form.branch.trim(),
+    form.commitSha.trim(),
+  ].join('|')
+}
+
 async function readApiError(response: Response): Promise<string> {
   try {
     const body = await response.json()
@@ -102,22 +113,27 @@ export default function HomePage() {
   const [runState, setRunState] = useState<RunState>('idle')
   const [error, setError] = useState<string | null>(null)
   const [markerResult, setMarkerResult] = useState<MarkerResult | null>(null)
+  const [markerKey, setMarkerKey] = useState<string | null>(null)
   const [formErrors, setFormErrors] = useState<FormErrors>({})
 
   const busy = runState !== 'idle'
+  const hasMinimumInput = Boolean(form.service.trim() && form.environment.trim() && form.releaseId.trim())
+  const currentMarkerKey = markerKeyFor(form)
   const status = useMemo(() => {
     if (busy) return runState === 'ingesting' ? 'Writing marker to Splunk' : 'Running Splunk analysis'
     if (error) return 'Blocked'
     if (report) return verdictFor(report)
     if (markerResult) return 'Marker written'
-    return 'Ready'
-  }, [busy, error, markerResult, report, runState])
+    if (hasMinimumInput) return 'Ready to run'
+    return 'Enter release details'
+  }, [busy, error, hasMinimumInput, markerResult, report, runState])
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm(current => ({ ...current, [key]: value }))
     setFormErrors(current => ({ ...current, [key]: undefined }))
     setReport(null)
     setMarkerResult(null)
+    setMarkerKey(null)
     setError(null)
   }
 
@@ -151,13 +167,21 @@ export default function HomePage() {
     setFormErrors(validationErrors)
     if (Object.keys(validationErrors).length > 0) return
 
+    const shouldWriteMarker = markerKey !== currentMarkerKey || !markerResult
+
     setError(null)
     setReport(null)
-    setMarkerResult(null)
+    if (shouldWriteMarker) {
+      setMarkerResult(null)
+    }
 
     try {
-      setRunState('ingesting')
-      setMarkerResult(await writeSplunkMarker())
+      if (shouldWriteMarker) {
+        setRunState('ingesting')
+        setMarkerResult(await writeSplunkMarker())
+        setMarkerKey(currentMarkerKey)
+      }
+
       setRunState('analyzing')
 
       const response = await fetch('/api/preflight', {
@@ -306,7 +330,9 @@ export default function HomePage() {
                 ? 'Writing marker'
                 : runState === 'analyzing'
                   ? 'Checking Splunk'
-                  : 'Run Release Preflight'}
+                  : report || markerResult
+                    ? 'Check Splunk Again'
+                    : 'Run Release Preflight'}
             </button>
           </div>
         </form>

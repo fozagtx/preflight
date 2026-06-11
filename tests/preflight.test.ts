@@ -19,6 +19,8 @@ describe('Release Preflight SPL builders', () => {
     expect(buildSummarySpl(request)).toContain('environment="prod"')
     expect(buildSummarySpl(request)).toContain('release_id="2026.06.11"')
     expect(buildSummarySpl(request)).toContain('NOT release_id=*')
+    expect(buildSummarySpl(request)).toContain('dedup release_preflight_dedupe_key')
+    expect(buildRecentSpl(request)).toContain('dedup release_preflight_dedupe_key')
     expect(buildErrorsSpl(request)).toContain('| stats count as count')
     expect(buildRecentSpl(request)).toContain('| table _time normalized_severity')
   })
