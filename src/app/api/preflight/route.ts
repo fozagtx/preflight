@@ -108,29 +108,36 @@ function buildDeterministicNarrative(
   recentRows: Record<string, unknown>[]
 ) {
   const summary = summaryRows[0] || {}
-  const totalEvents = String(summary.total_events ?? 0)
-  const errorEvents = String(summary.error_events ?? 0)
-  const failureSignals = String(summary.failure_signals ?? 0)
-  const affectedHosts = String(summary.affected_hosts ?? 0)
+  const totalEvents = Number(summary.total_events ?? 0)
+  const errorEvents = Number(summary.error_events ?? 0)
+  const failureSignals = Number(summary.failure_signals ?? 0)
+  const affectedHosts = Number(summary.affected_hosts ?? 0)
   const strongestError = errorRows[0]
   const latestEvent = recentRows[0]
+  const evidence = `Splunk evidence: ${totalEvents} event(s), ${errorEvents} explicit error(s), ${failureSignals} failure-language signal(s), ${affectedHosts} affected host(s).`
 
   if (strongestError) {
     return [
-      'Splunk AI narrative was not available; using deterministic Splunk MCP evidence.',
-      `Decision: canary or hold depending on release criticality.`,
-      `Evidence: ${totalEvents} events, ${errorEvents} errors, ${failureSignals} failure-language signals, ${affectedHosts} affected host(s).`,
+      'Decision: canary or hold until the strongest signal is understood.',
+      evidence,
       `Strongest signal: ${String(strongestError.latest_message ?? strongestError.raw_text ?? 'No message field returned')}.`,
     ].join(' ')
   }
 
+  if (totalEvents === 0) {
+    return [
+      'Decision: hold until Splunk returns evidence for this release.',
+      evidence,
+      'No matching event rows were returned; treat that as an observability gap.',
+    ].join(' ')
+  }
+
   return [
-    'Splunk AI narrative was not available; using deterministic Splunk MCP evidence.',
-    `Decision: canary with close observation.`,
-    `Evidence: ${totalEvents} events, ${errorEvents} errors, ${failureSignals} failure-language signals, ${affectedHosts} affected host(s).`,
+    'Decision: ship.',
+    evidence,
     latestEvent
       ? `Latest event: ${String(latestEvent.raw_text ?? latestEvent.message ?? 'No message field returned')}.`
-      : 'No matching event rows were returned; treat that as an observability gap.',
+      : 'No recent event detail was returned.',
   ].join(' ')
 }
 
