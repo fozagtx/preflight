@@ -244,7 +244,7 @@ export default function HomePage() {
                 required
                 value={form.service}
                 onChange={event => updateField('service', event.target.value)}
-                placeholder="checkout-api"
+                placeholder="your-service"
                 aria-invalid={Boolean(formErrors.service)}
                 aria-describedby={formErrors.service ? 'service-error' : undefined}
               />
@@ -268,7 +268,7 @@ export default function HomePage() {
                 required
                 value={form.releaseId}
                 onChange={event => updateField('releaseId', event.target.value)}
-                placeholder="2026.06.11"
+                placeholder="0.1.0"
                 aria-invalid={Boolean(formErrors.releaseId)}
                 aria-describedby={formErrors.releaseId ? 'releaseId-error' : undefined}
               />
@@ -293,7 +293,7 @@ export default function HomePage() {
               <input
                 value={form.repository}
                 onChange={event => updateField('repository', event.target.value)}
-                placeholder="https://github.com/fozagtx/eyez"
+                placeholder="https://github.com/fozagtx/preflight"
               />
             </label>
             <label>
@@ -309,7 +309,7 @@ export default function HomePage() {
               <input
                 value={form.commitSha}
                 onChange={event => updateField('commitSha', event.target.value)}
-                placeholder="abc1234"
+                placeholder="paste commit SHA"
               />
             </label>
           </div>

@@ -9,7 +9,7 @@ const request: PreflightRequest = {
   releaseId: '2026.06.11',
   repository: 'https://github.com/acme/checkout',
   branch: 'main',
-  commitSha: 'abc1234',
+  commitSha: 'f07c049',
   lookbackMinutes: 240,
 }
 
