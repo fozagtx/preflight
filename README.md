@@ -4,6 +4,10 @@ Splunk-backed release risk check for a GitHub project link.
 
 Live app: [https://release-preflight.vercel.app](https://release-preflight.vercel.app)
 
+## License
+
+MIT. See [LICENSE](./LICENSE).
+
 ## Main Flow
 
 1. Paste a GitHub repository, branch, or commit link.
